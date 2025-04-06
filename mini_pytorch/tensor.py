@@ -147,3 +147,13 @@ def make_grad_fn(
         return grad
 
     return grad_fn
+
+
+def neg(t: Tensor) -> Tensor:
+    data = -t.data
+    requires_grad = t.requires_grad
+    if requires_grad:
+        depends_on = [Dependency(t, lambda x: -x)]
+    else:
+        depends_on = []
+    return Tensor(data, requires_grad, depends_on)
