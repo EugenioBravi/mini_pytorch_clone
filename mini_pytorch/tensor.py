@@ -88,6 +88,8 @@ def add(t1: Tensor, t2: Tensor) -> Tensor:
 
         def grad_fn1(grad: np.ndarray) -> np.ndarray:
             # sum out added dims
+            if grad.shape == t1.data.shape:
+                return grad
             added_dims = grad.ndim - t1.data.ndim
             for _ in range(added_dims):
                 grad = grad.sum(axis=0)
@@ -102,6 +104,8 @@ def add(t1: Tensor, t2: Tensor) -> Tensor:
 
         def grad_fn2(grad: np.ndarray) -> np.ndarray:
             # sum out added dims
+            if grad.shape == t2.data.shape:
+                return grad
             added_dims = grad.ndim - t2.data.ndim
             for _ in range(added_dims):
                 grad = grad.sum(axis=0)
@@ -109,6 +113,66 @@ def add(t1: Tensor, t2: Tensor) -> Tensor:
             for i, dim in enumerate(t2.shape):
                 if dim == 1:
                     grad = grad.sum(axis=i, keepdims=True)
+            return grad
+
+        depends_on.append(Dependency(t2, grad_fn2))
+
+    return Tensor(data, requires_grad, depends_on)
+
+
+def mul(t1: Tensor, t2: Tensor) -> Tensor:
+    """
+    y = a * b
+    have dL/dy
+    dL/da = dL/dy * b
+    """
+    data = t1.data * t2.data
+    requires_grad = t1.requires_grad or t2.requires_grad
+    depends_on: list[Dependency] = []
+    if t1.requires_grad:
+
+        def grad_fn1(grad: np.ndarray) -> np.ndarray:
+            # Multiply by t2's data with proper broadcasting
+            grad = grad * t2.data
+
+            # Sum over expanded dimensions
+            if grad.shape != t1.data.shape:
+                # Find axes that were broadcasted in the forward pass
+                sum_axes = []
+                for i in range(-1, -len(grad.shape) - 1, -1):
+                    if i < -len(t1.data.shape) or t1.data.shape[i] == 1:
+                        sum_axes.append(i)
+                if sum_axes:
+                    grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
+
+                # Remove extra dimensions if needed
+                if grad.ndim > t1.data.ndim:
+                    grad = grad.reshape(t1.data.shape)
+
+            return grad
+
+        depends_on.append(Dependency(t1, grad_fn1))
+
+    if t2.requires_grad:
+
+        def grad_fn2(grad: np.ndarray) -> np.ndarray:
+            # Multiply by t1's data with proper broadcasting
+            grad = grad * t1.data
+
+            # Sum over expanded dimensions
+            if grad.shape != t2.data.shape:
+                # Find axes that were broadcasted in the forward pass
+                sum_axes = []
+                for i in range(-1, -len(grad.shape) - 1, -1):
+                    if i < -len(t2.data.shape) or t2.data.shape[i] == 1:
+                        sum_axes.append(i)
+                if sum_axes:
+                    grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
+
+                # Remove extra dimensions if needed
+                if grad.ndim > t2.data.ndim:
+                    grad = grad.reshape(t2.data.shape)
+
             return grad
 
         depends_on.append(Dependency(t2, grad_fn2))
