@@ -1,4 +1,5 @@
 import unittest
+import numpy as np
 from mini_pytorch.tensor import Tensor, add
 
 
@@ -103,3 +104,23 @@ class TestTensorSum(unittest.TestCase):
 
         assert t1.grad.data.tolist() == 1.0
         assert t2.grad.data.tolist() == 1.0
+
+    def test_broadcasted_add_gradients(self):
+        t1 = Tensor([[1.0], [2.0], [3.0]], requires_grad=True)  # Shape (3, 1)
+        t2 = Tensor([10.0, 20.0, 30.0], requires_grad=True)  # Shape (3,)
+
+        t3 = add(t1, t2)  # Result shape (3, 3)
+        t3.backward(Tensor(np.ones_like(t3.data)))  # Upstream gradient is all ones
+
+        # t1.grad should sum over columns (axis=1)
+        assert t1.grad.data.tolist() == [[3.0], [3.0], [3.0]]
+
+        # t2.grad should sum over rows (axis=0)
+        assert t2.grad.data.tolist() == [3.0, 3.0, 3.0]
+
+        # Forward pass check
+        assert t3.data.tolist() == [
+            [11.0, 21.0, 31.0],
+            [12.0, 22.0, 32.0],
+            [13.0, 23.0, 33.0],
+        ]
