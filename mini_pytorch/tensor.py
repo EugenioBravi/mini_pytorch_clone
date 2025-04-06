@@ -85,37 +85,12 @@ def add(t1: Tensor, t2: Tensor) -> Tensor:
     requires_grad = t1.requires_grad or t2.requires_grad
     depends_on: list[Dependency] = []
     if t1.requires_grad:
+        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g)
+        depends_on.append(Dependency(t1, grad_fn))
 
-        def grad_fn1(grad: np.ndarray) -> np.ndarray:
-            # sum out added dims
-            if grad.shape == t1.data.shape:
-                return grad
-            added_dims = grad.ndim - t1.data.ndim
-            for _ in range(added_dims):
-                grad = grad.sum(axis=0)
-            # Sum across broadcasted (but non-added dims)
-            for i, dim in enumerate(t1.shape):
-                if dim == 1:
-                    grad = grad.sum(axis=i, keepdims=True)
-            return grad
-
-        depends_on.append(Dependency(t1, grad_fn1))
     if t2.requires_grad:
-
-        def grad_fn2(grad: np.ndarray) -> np.ndarray:
-            # sum out added dims
-            if grad.shape == t2.data.shape:
-                return grad
-            added_dims = grad.ndim - t2.data.ndim
-            for _ in range(added_dims):
-                grad = grad.sum(axis=0)
-            # Sum across broadcasted (but non-added dims)
-            for i, dim in enumerate(t2.shape):
-                if dim == 1:
-                    grad = grad.sum(axis=i, keepdims=True)
-            return grad
-
-        depends_on.append(Dependency(t2, grad_fn2))
+        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: g)
+        depends_on.append(Dependency(t2, grad_fn))
 
     return Tensor(data, requires_grad, depends_on)
 
@@ -130,51 +105,45 @@ def mul(t1: Tensor, t2: Tensor) -> Tensor:
     requires_grad = t1.requires_grad or t2.requires_grad
     depends_on: list[Dependency] = []
     if t1.requires_grad:
-
-        def grad_fn1(grad: np.ndarray) -> np.ndarray:
-            # Multiply by t2's data with proper broadcasting
-            grad = grad * t2.data
-
-            # Sum over expanded dimensions
-            if grad.shape != t1.data.shape:
-                # Find axes that were broadcasted in the forward pass
-                sum_axes = []
-                for i in range(-1, -len(grad.shape) - 1, -1):
-                    if i < -len(t1.data.shape) or t1.data.shape[i] == 1:
-                        sum_axes.append(i)
-                if sum_axes:
-                    grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
-
-                # Remove extra dimensions if needed
-                if grad.ndim > t1.data.ndim:
-                    grad = grad.reshape(t1.data.shape)
-
-            return grad
-
-        depends_on.append(Dependency(t1, grad_fn1))
+        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g * x)
+        depends_on.append(Dependency(t1, grad_fn))
 
     if t2.requires_grad:
-
-        def grad_fn2(grad: np.ndarray) -> np.ndarray:
-            # Multiply by t1's data with proper broadcasting
-            grad = grad * t1.data
-
-            # Sum over expanded dimensions
-            if grad.shape != t2.data.shape:
-                # Find axes that were broadcasted in the forward pass
-                sum_axes = []
-                for i in range(-1, -len(grad.shape) - 1, -1):
-                    if i < -len(t2.data.shape) or t2.data.shape[i] == 1:
-                        sum_axes.append(i)
-                if sum_axes:
-                    grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
-
-                # Remove extra dimensions if needed
-                if grad.ndim > t2.data.ndim:
-                    grad = grad.reshape(t2.data.shape)
-
-            return grad
-
-        depends_on.append(Dependency(t2, grad_fn2))
+        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: g * x)
+        depends_on.append(Dependency(t2, grad_fn))
 
     return Tensor(data, requires_grad, depends_on)
+
+
+def make_grad_fn(
+    original_shape: tuple, other_data: np.ndarray, chain_rule_fn: Callable
+) -> Callable[[np.ndarray], np.ndarray]:
+    """
+    Args:
+        original_shape: Shape of the Tensor.
+        other_data: Other Tensor data.
+        chain_rule_fn: Function that takes (grad, other_data) and returns modified grad.
+        example: chain_rule_fn = lambda g, x: g * x <-- multiplication chain rule
+    """
+
+    def grad_fn(grad: np.ndarray) -> np.ndarray:
+        grad = chain_rule_fn(grad, other_data)
+        # 2. Handle broadcasting if shapes don't match
+        if grad.shape != original_shape:
+            # Sum over added dimensions (dimensions that didn't exist in original)
+            added_dims = grad.ndim - len(original_shape)
+            for _ in range(added_dims):
+                grad = grad.sum(axis=0)
+
+            # Sum over broadcasted dimensions (where original had size 1)
+            for i, dim in enumerate(original_shape):
+                if dim == 1:
+                    grad = grad.sum(axis=i, keepdims=True)
+
+            # Final reshape if needed (for cases like (3,1,1) -> (3,1))
+            if grad.shape != original_shape:
+                grad = grad.reshape(original_shape)
+
+        return grad
+
+    return grad_fn
