@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from mini_pytorch.tensor import Tensor, neg, add
+from mini_pytorch.tensor import Tensor, neg
 
 
 class TestTensorNeg(unittest.TestCase):
@@ -76,7 +76,7 @@ class TestTensorNeg(unittest.TestCase):
         t2 = Tensor(4.0, requires_grad=True)
 
         # -(3 + 4)
-        t3 = neg(add(t1, t2))
+        t3 = neg(t1 + t2)
         t3.backward()
 
         assert t3.data.tolist() == -7.0

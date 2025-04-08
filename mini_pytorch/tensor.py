@@ -18,6 +18,16 @@ def ensure_array(arrayable: Arrayable) -> np.ndarray:
         return np.array(arrayable)
 
 
+Tensorable = Union["Tensor", np.ndarray, float]
+
+
+def ensure_tensor(tensorable: Tensorable) -> Tensor:
+    if isinstance(tensorable, Tensor):
+        return tensorable
+    else:
+        return Tensor(tensorable)
+
+
 class Tensor:
     def __init__(
         self,
@@ -36,6 +46,12 @@ class Tensor:
 
     def __repr__(self) -> str:
         return f"Tensor({self.data}, requires_grad={self.requires_grad})"
+
+    def __add__(self, other: Tensorable) -> Tensor:
+        return _add(self, ensure_tensor(other))
+
+    def __radd__(self, other: Tensorable) -> Tensor:
+        return _add(self, ensure_tensor(other))
 
     def zero_grad(self) -> None:
         self.grad = Tensor(np.zeros_like(self.data, dtype=np.float64))
@@ -80,7 +96,7 @@ def tensor_sum(t: Tensor) -> Tensor:
     return Tensor(data, requires_grad, depends_on)
 
 
-def add(t1: Tensor, t2: Tensor) -> Tensor:
+def _add(t1: Tensor, t2: Tensor) -> Tensor:
     data = t1.data + t2.data
     requires_grad = t1.requires_grad or t2.requires_grad
     depends_on: list[Dependency] = []
@@ -128,20 +144,23 @@ def make_grad_fn(
 
     def grad_fn(grad: np.ndarray) -> np.ndarray:
         grad = chain_rule_fn(grad, other_data)
-        # 2. Handle broadcasting if shapes don't match
+
         if grad.shape != original_shape:
-            # Sum over added dimensions (dimensions that didn't exist in original)
-            added_dims = grad.ndim - len(original_shape)
-            for _ in range(added_dims):
-                grad = grad.sum(axis=0)
+            # Identify all axes that were either:
+            # 1. Added in forward pass (not in original shape), OR
+            # 2. Were size-1 in original (and thus broadcasted)
+            sum_axes = [
+                i
+                for i in range(-1, -len(grad.shape) - 1, -1)
+                if (i < -len(original_shape))  # Added dimension
+                or (original_shape[i] == 1)  # Broadcasted dimension
+            ]
 
-            # Sum over broadcasted dimensions (where original had size 1)
-            for i, dim in enumerate(original_shape):
-                if dim == 1:
-                    grad = grad.sum(axis=i, keepdims=True)
+            if sum_axes:
+                grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
 
-            # Final reshape if needed (for cases like (3,1,1) -> (3,1))
-            if grad.shape != original_shape:
+            # Remove any extra dimensions that summing didn't handle
+            if grad.ndim > len(original_shape):
                 grad = grad.reshape(original_shape)
 
         return grad
@@ -160,4 +179,4 @@ def neg(t: Tensor) -> Tensor:
 
 
 def sub(t1: Tensor, t2: Tensor) -> Tensor:
-    return add(t1, neg(t2))
+    return _add(t1, neg(t2))
