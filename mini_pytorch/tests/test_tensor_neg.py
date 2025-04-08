@@ -1,13 +1,13 @@
 import unittest
 import numpy as np
-from mini_pytorch.tensor import Tensor, neg
+from mini_pytorch.tensor import Tensor
 
 
 class TestTensorNeg(unittest.TestCase):
     def test_neg_basic(self):
         """Test basic negation with scalar"""
         t1 = Tensor(5.0, requires_grad=True)
-        t2 = neg(t1)
+        t2 = -t1
 
         # Forward pass check
         assert t2.data.tolist() == -5.0
@@ -19,7 +19,7 @@ class TestTensorNeg(unittest.TestCase):
     def test_neg_vector(self):
         """Test negation with 1D tensor"""
         t1 = Tensor([1.0, -2.0, 3.0], requires_grad=True)
-        t2 = neg(t1)
+        t2 = -t1
 
         # Forward pass
         assert t2.data.tolist() == [-1.0, 2.0, -3.0]
@@ -34,7 +34,7 @@ class TestTensorNeg(unittest.TestCase):
     def test_neg_matrix(self):
         """Test negation with 2D tensor"""
         t1 = Tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
-        t2 = neg(t1)
+        t2 = -t1
 
         # Forward pass
         assert t2.data.tolist() == [[-1.0, -2.0], [-3.0, -4.0]]
@@ -46,9 +46,9 @@ class TestTensorNeg(unittest.TestCase):
     def test_neg_chain(self):
         """Test multiple negations in sequence"""
         t1 = Tensor(2.0, requires_grad=True)
-        t2 = neg(t1)  # -2.0
-        t3 = neg(t2)  # 2.0
-        t4 = neg(t3)  # -2.0
+        t2 = -t1  # -2.0
+        t3 = -t2  # 2.0
+        t4 = -t3  # -2.0
 
         t4.backward()
 
@@ -60,7 +60,7 @@ class TestTensorNeg(unittest.TestCase):
     def test_neg_custom_grad(self):
         """Test negation with non-unity upstream gradient"""
         t1 = Tensor([1.0, 2.0, 3.0], requires_grad=True)
-        t2 = neg(t1)
+        t2 = -t1
 
         # Backward pass with custom gradient
         t2.backward(Tensor([2.0, 4.0, 6.0]))
@@ -76,7 +76,7 @@ class TestTensorNeg(unittest.TestCase):
         t2 = Tensor(4.0, requires_grad=True)
 
         # -(3 + 4)
-        t3 = neg(t1 + t2)
+        t3 = -(t1 + t2)
         t3.backward()
 
         assert t3.data.tolist() == -7.0
@@ -86,7 +86,7 @@ class TestTensorNeg(unittest.TestCase):
     def test_neg_high_dim(self):
         """Test negation with 3D tensor"""
         t1 = Tensor(np.ones((2, 2, 2)), requires_grad=True)
-        t2 = neg(t1)
+        t2 = -t1
 
         # Forward pass
         assert t2.data.tolist() == [

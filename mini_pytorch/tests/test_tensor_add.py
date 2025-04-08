@@ -13,6 +13,9 @@ class TestTensorSum(unittest.TestCase):
 
         assert t1.grad.data.tolist() == [-1, -2, -3]
         assert t2.grad.data.tolist() == [-1, -2, -3]
+        t1 += 0.1
+        assert t1.grad is None
+        assert t1.data.tolist() == [1.1, 2.1, 3.1]
 
     def test_scalar_addition(self):
         t1 = Tensor([1, 2, 3], requires_grad=True)
