@@ -35,14 +35,27 @@ class Tensor:
         requires_grad: bool = False,
         depends_on: Optional[list[Dependency]] = None,
     ) -> None:
-        self.data = ensure_array(data)
+        self._data = ensure_array(data)
         self.requires_grad = requires_grad
         self.depends_on = depends_on or []
-        self.shape = self.data.shape
+        self.shape = self._data.shape
         self.grad: Optional[Tensor] = None
 
         if self.requires_grad:
             self.zero_grad()
+
+    @property
+    def data(self) -> np.ndarray:
+        return self._data
+
+    @data.setter
+    def data(self, new_data: np.ndarray) -> None:
+        self._data = new_data
+        # Setting the data manually means we invalidate the gradient
+        self.grad = None
+
+    def zero_grad(self) -> None:
+        self.grad = Tensor(np.zeros_like(self.data, dtype=np.float64))
 
     def __repr__(self) -> str:
         return f"Tensor({self.data}, requires_grad={self.requires_grad})"
@@ -55,8 +68,7 @@ class Tensor:
 
     def __iadd__(self, other: Tensorable) -> Tensor:
         self.data = self.data + ensure_tensor(other).data
-        # Invalidate the gradient
-        self.grad = None
+
         return self
 
     def __mul__(self, other: Tensorable) -> Tensor:
@@ -67,9 +79,11 @@ class Tensor:
 
     def __imul__(self, other: Tensorable) -> Tensor:
         self.data = self.data * ensure_tensor(other).data
-        # Invalidate the gradient
-        self.grad = None
+
         return self
+
+    def __matmul__(self, other) -> Tensor:
+        return _matmul(self, other)
 
     def __neg__(self) -> Tensor:
         return _neg(self)
@@ -85,12 +99,10 @@ class Tensor:
 
     def __isub__(self, other: Tensorable) -> Tensor:
         self.data = self.data - ensure_tensor(other).data
-        # Invalidate the gradient
-        self.grad = None
         return self
 
-    def zero_grad(self) -> None:
-        self.grad = Tensor(np.zeros_like(self.data, dtype=np.float64))
+    def __getitem__(self, idxs) -> Tensor:
+        return _slice(self, idxs)
 
     def backward(self, grad: Optional[Tensor] = None) -> None:
         assert self.requires_grad, "called backward on non-requires-grad tensor"
@@ -102,7 +114,6 @@ class Tensor:
                 grad = Tensor(1.0)
             else:
                 raise RuntimeError("grad must be specified for non-0-tensor")
-
         self.grad.data += grad.data
 
         for dependency in self.depends_on:
@@ -137,11 +148,11 @@ def _add(t1: Tensor, t2: Tensor) -> Tensor:
     requires_grad = t1.requires_grad or t2.requires_grad
     depends_on: list[Dependency] = []
     if t1.requires_grad:
-        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g)
+        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g, True)
         depends_on.append(Dependency(t1, grad_fn))
 
     if t2.requires_grad:
-        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: g)
+        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: g, True)
         depends_on.append(Dependency(t2, grad_fn))
 
     return Tensor(data, requires_grad, depends_on)
@@ -157,11 +168,11 @@ def _mul(t1: Tensor, t2: Tensor) -> Tensor:
     requires_grad = t1.requires_grad or t2.requires_grad
     depends_on: list[Dependency] = []
     if t1.requires_grad:
-        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g * x)
+        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g * x, True)
         depends_on.append(Dependency(t1, grad_fn))
 
     if t2.requires_grad:
-        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: g * x)
+        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: g * x, True)
         depends_on.append(Dependency(t2, grad_fn))
 
     return Tensor(data, requires_grad, depends_on)
@@ -181,38 +192,75 @@ def _sub(t1: Tensor, t2: Tensor) -> Tensor:
     return t1 + -t2
 
 
+def _matmul(t1: Tensor, t2: Tensor) -> Tensor:
+    data = t1.data @ t2.data
+    requires_grad = t1.requires_grad or t2.requires_grad
+    depends_on: list[Dependency] = []
+    if t1.requires_grad:
+        grad_fn = make_grad_fn(t1.shape, t2.data, lambda g, x: g @ x.T)
+        depends_on.append(Dependency(t1, grad_fn))
+
+    if t2.requires_grad:
+        grad_fn = make_grad_fn(t2.shape, t1.data, lambda g, x: x.T @ g)
+        depends_on.append(Dependency(t2, grad_fn))
+
+    return Tensor(data, requires_grad, depends_on)
+
+
 def make_grad_fn(
-    original_shape: tuple, other_data: np.ndarray, chain_rule_fn: Callable
+    original_shape: tuple,
+    other_data: np.ndarray,
+    chain_rule_fn: Callable,
+    requires_broadcast: bool = False,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """
     Args:
         original_shape: Shape of the Tensor.
         other_data: Other Tensor data.
         chain_rule_fn: Function that takes (grad, other_data) and returns modified grad.
+        requires_broadcast: Bool that determines wheter the grad requires broadcasting or not
         example: chain_rule_fn = lambda g, x: g * x <-- multiplication chain rule
     """
 
     def grad_fn(grad: np.ndarray) -> np.ndarray:
         grad = chain_rule_fn(grad, other_data)
+        if requires_broadcast:
+            if grad.shape != original_shape:
+                # Identify all axes that were either:
+                # 1. Added in forward pass (not in original shape), OR
+                # 2. Were size-1 in original (and thus broadcasted)
+                sum_axes = [
+                    i
+                    for i in range(-1, -len(grad.shape) - 1, -1)
+                    if (i < -len(original_shape))  # Added dimension
+                    or (original_shape[i] == 1)  # Broadcasted dimension
+                ]
 
-        if grad.shape != original_shape:
-            # Identify all axes that were either:
-            # 1. Added in forward pass (not in original shape), OR
-            # 2. Were size-1 in original (and thus broadcasted)
-            sum_axes = [
-                i
-                for i in range(-1, -len(grad.shape) - 1, -1)
-                if (i < -len(original_shape))  # Added dimension
-                or (original_shape[i] == 1)  # Broadcasted dimension
-            ]
+                if sum_axes:
+                    grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
 
-            if sum_axes:
-                grad = grad.sum(axis=tuple(sum_axes), keepdims=True)
-
-            # Remove any extra dimensions that summing didn't handle
-            if grad.ndim > len(original_shape):
-                grad = grad.reshape(original_shape)
+                # Remove any extra dimensions that summing didn't handle
+                if grad.ndim > len(original_shape):
+                    grad = grad.reshape(original_shape)
 
         return grad
 
     return grad_fn
+
+
+def _slice(t: Tensor, idxs) -> Tensor:
+    data = t.data[idxs]
+    requires_grad = t.requires_grad
+
+    if requires_grad:
+
+        def grad_fn(grad: np.ndarray) -> np.ndarray:
+            bigger_grad = np.zeros_like(t.data)
+            bigger_grad[idxs] = grad
+            return bigger_grad
+
+        depends_on = Dependency(t, grad_fn)
+    else:
+        depends_on = []
+
+    return Tensor(data, requires_grad, depends_on)
