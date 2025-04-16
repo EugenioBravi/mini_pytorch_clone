@@ -3,7 +3,7 @@ import numpy as np
 from mini_pytorch.tensor import Tensor
 
 
-class TestTensorSum(unittest.TestCase):
+class TestTensorMul(unittest.TestCase):
     def test_simple_mul(self):
         t1 = Tensor([1, 2, 3], requires_grad=True)
         t2 = Tensor([4, 5, 6], requires_grad=True)
